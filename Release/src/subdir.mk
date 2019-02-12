@@ -6,16 +6,19 @@
 CPP_SRCS += \
 ../src/AMath.cpp \
 ../src/APVRec.cpp \
+../src/ATimeSpace.cpp \
 ../src/pvrec.cpp 
 
 OBJS += \
 ./src/AMath.o \
 ./src/APVRec.o \
+./src/ATimeSpace.o \
 ./src/pvrec.o 
 
 CPP_DEPS += \
 ./src/AMath.d \
 ./src/APVRec.d \
+./src/ATimeSpace.d \
 ./src/pvrec.d 
 
 

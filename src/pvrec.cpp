@@ -27,9 +27,12 @@
 #include <string>
 #include <boost/filesystem.hpp>
 #include "APVRec.h"
+#include "ATimeSpace.h"
 
 using std::string;
 using namespace AstroUtil;
+
+ATimeSpace ats; // 全局变量, 唯一访问接口
 
 /*
  * @brief 解析存储原始数据的文件中的一行信息
@@ -38,24 +41,25 @@ using namespace AstroUtil;
  * - 第二行至结束, 各列依次为:
  * UTC(精度到秒), 帧编号, X, Y, ra, dec, mag, mag_error, 亚秒(微秒), 天区编号
  */
-void resolve_line(const char* line, pv_point& pt) {
-	int hh, mm, ss, mics;
+void resolve_line(const char* line, pv_point& pt, int &camid) {
+	int iy, im, id, hh, mm, ss, mics;
 	double errmag;
 
 	// 格式要求(要求)
 	sscanf(line, "%d-%d-%d %d:%d:%d, %d, %lf, %lf, %lf, %lf, %lf, %lf, %d, %d",
-			&pt.year, &pt.month, &pt.day, &hh, &mm, &ss, &pt.fno,
-			&pt.x, &pt.y, &pt.ra, &pt.dec,
-			&pt.mag, &errmag, &mics, &pt.camid);
-	pt.secs = hh * 3600 + mm * 60 + ss + mics * 1E-6;
-	pt.secs += 5;  // 加曝光时间/2修正量, 14 Oct
+			&iy, &im, &id, &hh, &mm, &ss, &pt.fno,
+			&pt.x, &pt.y, &pt.ra, &pt.dc,
+			&pt.mag, &errmag, &mics, &camid);
+	ats.SetUTC(iy, im, id,
+			(hh + (mm + (ss + mics * 1E-6 + 5.0) / 60.0) / 60.0) / 24.0);
+	pt.mjd = ats.ModifiedJulianDay();
 }
 
-void SS2HMS(double seconds, int& hh, int& mm, double& ss) {
-	hh = (int) (seconds / 3600);
-	seconds -= (hh * 3600);
-	mm = (int) (seconds / 60);
-	ss = seconds - mm * 60;
+void Days2HMS(double fd, int &hh, int &mm, double &ss) {
+	hh = (int) fd;
+	fd = (fd - hh) * 60.0;
+	mm = (int) fd;
+	ss = (fd - mm) * 60.0;
 }
 
 /*!
@@ -68,20 +72,20 @@ void SS2HMS(double seconds, int& hh, int& mm, double& ss) {
 int OutputObjects(APVRec *pvrec, const char *dirDst) {
 	namespace fs = boost::filesystem;
 	char filename[50];
-	PPVOBJLNK objs = pvrec->get_object();
-	PPVPTLNK ptptr;
+	int camid;
+	PPVOBJVEC & objs = pvrec->GetObject(camid);
 	PPVPT ppt;
-	int hh, mm, n(0);
-	double ss;
+	int iy, im, id, hh, mm, n(0);
+	double ss, fd;
 	FILE *fpdst;
 	fs::path path;
 
-	while((objs = objs->next) != NULL) {
+	for (PPVOBJVEC::iterator it = objs.begin(); it != objs.end(); ++it) {
 		ptptr = objs->object.pthead->next;
 		ppt = ptptr->pt;
 		// 生成文件路径
 		sprintf(filename, "%d%02d%02d_%03d_%04d.txt",
-				ppt->year, ppt->month, ppt->day, ppt->camid, ++n);
+				iy, im, id, camid, ++n);
 		printf(">>>> %s\n", filename);
 
 		path = dirDst;
@@ -90,9 +94,10 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 		// 写入文件内容ß
 		do {
 			ppt = ptptr->pt;
-			SS2HMS(ppt->secs, hh, mm, ss);
+			ats.Mjd2Cal(ppt->mjd, iy, im, id, fd);
+			Days2HMS(fd * 24.0, hh, mm, ss);
 			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f %5.2f\r\n",
-					ppt->year, ppt->month, ppt->day, hh, mm, ss, ppt->fno, ppt->ra, ppt->dec, ppt->mag);
+					iy, im, id, hh, mm, ss, ppt->fno, ppt->ra, ppt->dc, ppt->mag);
 		} while((ptptr = ptptr->next) != NULL);
 
 		fclose(fpdst);
@@ -125,27 +130,27 @@ int ProcessFile(const char *pathRaw, const char *dirDst) {
 
 		if (camid != pt.camid) {
 			if (camid != -1) {
-				pvrec.end_frame();
-				pvrec.end_sequence();
+				pvrec.EndFrame();
+				pvrec.EndSequence();
 				objcnt += OutputObjects(&pvrec, dirDst); // 导出关联识别数据
 			}
 
 			camid = pt.camid;
 			fno   = -1;
-			pvrec.new_sequence();
+			pvrec.NewSequence();
 		}
 
 		if (fno != pt.fno) {
-			if (fno != -1) pvrec.end_frame();
+			if (fno != -1) pvrec.EndFrame();
 			fno = pt.fno;
 		}
 
-		pvrec.add_point(&pt);
+		pvrec.AddPoint(&pt);
 	}
 	fclose(fpraw); // 关闭原始文件
 	// 最好一行原始数据的特殊处理
-	pvrec.end_frame();
-	pvrec.end_sequence();
+	pvrec.EndFrame();
+	pvrec.EndSequence();
 	objcnt += OutputObjects(&pvrec, dirDst); // 导出关联识别数据
 	return objcnt;
 }
