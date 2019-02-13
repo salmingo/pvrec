@@ -11,9 +11,7 @@
  * @note
  * 工作流程:
  * (1) NewSequence(),   声明开始新的数据处理流程
- * (2) NewFrame(),      声明开始处理新的一帧图像数据
  * (3) AddPoint(),      导入数据点
- * (4) EndFrame(),      声明一帧数据导入完毕
  * (5) GetCandidate(),  查看暂时被识别为目标的详细信息
  * (6) EndSequence(),   声明数据处理流程结束
  * (7) GetNumber(),     查看识别出的目标数量
@@ -35,7 +33,6 @@
 #include <boost/container/stable_vector.hpp>
 #include <boost/container/deque.hpp>
 #include "ADefine.h"
-#include "AMath.h"
 
 using std::vector;
 
@@ -44,13 +41,17 @@ namespace AstroUtil {
 struct param_pv {// 位置变源关联识别参数
 	int    nptmin;	//< 构成PV的最小数据点数量
 	double dtmax;	//< 相邻关联数据点的最大时间间隔, 量纲: 天
+	double stepmin;	//< 最小步长
+	double stepmax;	//< 最大步长
 	double dxymax;	//< XY坐标偏差的最大值, 量纲: 像素
 
 public:
 	param_pv() {
-		nptmin = 5;
-		dtmax  = 60.0 / 86400.0;
-		dxymax = 1.0;
+		nptmin  = 5;
+		dtmax   = 60.0 / 86400.0;
+		stepmin = 1.0;
+		stepmax = 100.0;
+		dxymax  = 2.0;
 	}
 };
 
@@ -79,18 +80,15 @@ typedef boost::shared_ptr<PVPT> PPVPT;
 typedef boost::container::stable_vector<PPVPT> PPVPTVEC;
 
 typedef struct pv_frame {// 单帧数据共性属性及数据点集合
-	int fno;		//< 帧编号
 	double mjd;		//< 曝光中间时间对应的修正儒略日
 	PPVPTVEC pts;	//< 数据点集合
 
 public:
 	pv_frame() {
-		fno = -1;
 		mjd = 0.0;
 	}
 
-	pv_frame(int Fno, double Mjd) {
-		fno = Fno;
+	pv_frame(double Mjd) {
 		mjd = Mjd;
 	}
 
@@ -113,7 +111,6 @@ typedef struct pv_candidate {// 候选体
 	PPVPTVEC ptu;	//< 不确定数据点集合
 	PPVPTVEC frmu;	//< 由当前帧加入的不确定数据点
 	double vx, vy;	//< XY变化速度
-	double ax, ay;	//< XY变化加速度
 	double lastmjd;	//< 加入候选体的最后一个数据点对应的时间, 量纲: 天; 涵义: 修正儒略日
 
 public:
@@ -128,10 +125,6 @@ public:
 			double t = mjd - pt->mjd;
 			x = pt->x + vx * t;
 			y = pt->y + vy * t;
-			if (n >= 3) {
-				x += (0.5 * ax * t * t);
-				y += (0.5 * ay * t * t);
-			}
 		}
 		return (n >= 2);
 	}
@@ -139,7 +132,7 @@ public:
 	/*!
 	 * @brief 将一个数据点加入候选体
 	 */
-	void add_point(PPVPT pt) {//
+	void add_point(PPVPT pt) {
 		int n = pts.size();
 		pt->inc_rel();
 		if (n >= 2)      frmu.push_back(pt);
@@ -156,7 +149,7 @@ public:
 		}
 	}
 
-	void recheck_frame() {// 检查/确认来自当前帧的数据点是否加入候选体已确定数据区
+	void update() {// 检查/确认来自当前帧的数据点是否加入候选体已确定数据区
 		if (pts.size() >= 2) {
 			int n = frmu.size();
 			if (n) lastmjd = frmu[0]->mjd;
@@ -165,15 +158,8 @@ public:
 				PPVPT pt   = frmu[0];
 				PPVPT last = last_point();
 				double t   = pt->mjd - last->mjd;
-				double vxn = (pt->x - last->x) / t;
-				double vyn = (pt->y - last->y) / t;
-
-				if (pts.size() >= 3) {// 加速度
-					ax = vxn - vx;
-					ay = vyn - vy;
-				}
-				vx = vxn;
-				vy = vyn;
+				vx = (pt->x - last->x) / t;
+				vy = (pt->y - last->y) / t;
 				pts.push_back(pt);
 			}
 			else if (n) {// 来自当前帧的不确定点加入该候选体不确定库
@@ -214,8 +200,8 @@ public:
 protected:
 	param_pv param_;	//< 数据处理参数
 	int camid_;			//< 该批次数据使用的相机编号
-	PPVFRMDQ frms_;		//< 数据帧集合
-	PPVFRM frmlast_;	//< 最后一个数据帧
+	int fno_;			//< 最新数据帧编号
+	PPVFRM frmlast_;	//< 最新数据帧
 	PPVCANVEC cans_;	//< 候选体集合
 	PPVOBJVEC objs_;	//< 目标集合
 
@@ -229,17 +215,9 @@ public:
 	 */
 	void NewSequence(int camid);
 	/*!
-	 * @brief 准备处理同一帧图像的数据
-	 */
-	void NewFrame(int fno, double mjd);
-	/*!
 	 * @brief 添加一个数据点
 	 */
 	void AddPoint(PPVPT pt);
-	/*!
-	 * @brief 结束同一帧数据
-	 */
-	void EndFrame();
 	/*!
 	 * @brief 结束一个批次数据处理流程
 	 */
@@ -256,6 +234,38 @@ public:
 	 * @brief 查看被识别的目标
 	 */
 	PPVOBJVEC& GetObject(int &camid);
+
+protected:
+	/*!
+	 * @brief 准备处理同一帧图像的数据
+	 */
+	void new_frame(double mjd);
+	/*!
+	 * @brief 结束同一帧数据
+	 */
+	void end_frame();
+	/*!
+	 * @brief 建立新的候选体
+	 */
+	void create_candidates();
+	/*!
+	 * @brief 尝试将当前帧数据加入候选体
+	 */
+	void append_candidates();
+	/*!
+	 * @brief 检查候选体, 确认其有效性
+	 * @note
+	 * 判据: 候选体时标与当前帧时标之差是否大于阈值
+	 */
+	void recheck_candidates();
+	/*!
+	 * @brief 处理所有候选体
+	 */
+	void complete_candidates();
+	/*!
+	 * @brief 将一个候选体转换为目标
+	 */
+	void candidate2object(PPVCAN can);
 };
 ///////////////////////////////////////////////////////////////////////////////
 }

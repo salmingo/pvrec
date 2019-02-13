@@ -13,11 +13,12 @@
  - 功能:
    关联不同时间的数据点, 从中提取位置变化源
 
- Bug: 2019-02-10
- 1. 第一个数据点与第二个的帧间隔超过阈值（5）
- 2. 相邻数据点经常被跳过, 输出文件中相邻点间隔多帧
- 3. 一个数据点被关联进入多条轨迹
+ Bug: 2019-02-13
+ 1. 无效星等. mag>20.0, 输出为99.99
+ 2. 一个轨迹被识别为多个. 原因: (1) 匹配误差阈值; (2) XY应替换为赤经赤纬?
+ 3. 目标目录必须加/作为追加符, 否则无法识别为目录
 ============================================================================*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -26,6 +27,7 @@
 #include <sys/time.h>
 #include <string>
 #include <boost/filesystem.hpp>
+#include <boost/make_shared.hpp>
 #include "APVRec.h"
 #include "ATimeSpace.h"
 
@@ -41,18 +43,20 @@ ATimeSpace ats; // 全局变量, 唯一访问接口
  * - 第二行至结束, 各列依次为:
  * UTC(精度到秒), 帧编号, X, Y, ra, dec, mag, mag_error, 亚秒(微秒), 天区编号
  */
-void resolve_line(const char* line, pv_point& pt, int &camid) {
+PPVPT resolve_line(const char* line, int &camid) {
 	int iy, im, id, hh, mm, ss, mics;
 	double errmag;
+	PPVPT pt = boost::make_shared<pv_point>();
 
 	// 格式要求(要求)
 	sscanf(line, "%d-%d-%d %d:%d:%d, %d, %lf, %lf, %lf, %lf, %lf, %lf, %d, %d",
-			&iy, &im, &id, &hh, &mm, &ss, &pt.fno,
-			&pt.x, &pt.y, &pt.ra, &pt.dc,
-			&pt.mag, &errmag, &mics, &camid);
+			&iy, &im, &id, &hh, &mm, &ss, &pt->fno,
+			&pt->x, &pt->y, &pt->ra, &pt->dc,
+			&pt->mag, &errmag, &mics, &camid);
 	ats.SetUTC(iy, im, id,
 			(hh + (mm + (ss + mics * 1E-6 + 5.0) / 60.0) / 60.0) / 24.0);
-	pt.mjd = ats.ModifiedJulianDay();
+	pt->mjd = ats.ModifiedJulianDay();
+	return pt;
 }
 
 void Days2HMS(double fd, int &hh, int &mm, double &ss) {
@@ -74,31 +78,33 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 	char filename[50];
 	int camid;
 	PPVOBJVEC & objs = pvrec->GetObject(camid);
-	PPVPT ppt;
+	PPVPT pt;
 	int iy, im, id, hh, mm, n(0);
 	double ss, fd;
 	FILE *fpdst;
 	fs::path path;
 
 	for (PPVOBJVEC::iterator it = objs.begin(); it != objs.end(); ++it) {
-		ptptr = objs->object.pthead->next;
-		ppt = ptptr->pt;
+		PPVOBJ obj = *it;
+		PPVPTVEC &pts = obj->pts;
 		// 生成文件路径
+		ats.Mjd2Cal(pts[0]->mjd, iy, im, id, fd);
 		sprintf(filename, "%d%02d%02d_%03d_%04d.txt",
 				iy, im, id, camid, ++n);
-		printf(">>>> %s\n", filename);
-
 		path = dirDst;
-		path += filename;
+		path /= filename;
 		fpdst = fopen(path.c_str(), "w");
-		// 写入文件内容ß
-		do {
-			ppt = ptptr->pt;
-			ats.Mjd2Cal(ppt->mjd, iy, im, id, fd);
+		printf(">>>> %s\n", filename);
+		// 写入文件内容
+		for (PPVPTVEC::iterator i = pts.begin(); i != pts.end(); ++i) {
+			pt = *i;
+			ats.Mjd2Cal(pt->mjd, iy, im, id, fd);
 			Days2HMS(fd * 24.0, hh, mm, ss);
-			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f %5.2f\r\n",
-					iy, im, id, hh, mm, ss, ppt->fno, ppt->ra, ppt->dc, ppt->mag);
-		} while((ptptr = ptptr->next) != NULL);
+			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f ",
+					iy, im, id, hh, mm, ss, pt->fno, pt->ra, pt->dc);
+			if (pt->mag > 20.0) fprintf(fpdst, "99.99\r\n");
+			else fprintf(fpdst, "%5.2f\r\n", pt->mag);
+		}
 
 		fclose(fpdst);
 	}
@@ -114,8 +120,7 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 int ProcessFile(const char *pathRaw, const char *dirDst) {
 	FILE *fpraw;
 	char line[200];
-	int objcnt(0), camid(-1), fno(-1);
-	pv_point pt;
+	int objcnt(0), newid(-1), oldid(-1);
 	APVRec pvrec;
 
 	if ((fpraw = fopen(pathRaw, "r")) == NULL) {// 打开原始文件
@@ -126,32 +131,25 @@ int ProcessFile(const char *pathRaw, const char *dirDst) {
 	fgets(line, 200, fpraw); // 空读一行
 	while (!feof(fpraw)) {// 遍历原始数据文件
 		if (fgets(line, 200, fpraw) == NULL) continue;
-		resolve_line(line, pt);
+		PPVPT pt = resolve_line(line, newid);
 
-		if (camid != pt.camid) {
-			if (camid != -1) {
-				pvrec.EndFrame();
+		if (oldid != newid) {
+			if (oldid != -1) {
 				pvrec.EndSequence();
 				objcnt += OutputObjects(&pvrec, dirDst); // 导出关联识别数据
 			}
 
-			camid = pt.camid;
-			fno   = -1;
-			pvrec.NewSequence();
+			oldid = newid;
+			pvrec.NewSequence(newid);
 		}
 
-		if (fno != pt.fno) {
-			if (fno != -1) pvrec.EndFrame();
-			fno = pt.fno;
-		}
-
-		pvrec.AddPoint(&pt);
+		pvrec.AddPoint(pt);
 	}
 	fclose(fpraw); // 关闭原始文件
 	// 最好一行原始数据的特殊处理
-	pvrec.EndFrame();
 	pvrec.EndSequence();
 	objcnt += OutputObjects(&pvrec, dirDst); // 导出关联识别数据
+
 	return objcnt;
 }
 

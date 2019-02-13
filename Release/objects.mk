@@ -4,5 +4,5 @@
 
 USER_OBJS :=
 
-LIBS := -lboost_filesystem-mt
+LIBS := -lm -lboost_filesystem-mt
 
