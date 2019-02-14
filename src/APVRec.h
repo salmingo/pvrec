@@ -108,7 +108,6 @@ typedef boost::container::deque<PPVFRM> PPVFRMDQ;
  */
 typedef struct pv_candidate {// 候选体
 	PPVPTVEC pts;	//< 已确定数据点集合
-	PPVPTVEC ptu;	//< 不确定数据点集合
 	PPVPTVEC frmu;	//< 由当前帧加入的不确定数据点
 	double vx, vy;	//< XY变化速度
 	double lastmjd;	//< 加入候选体的最后一个数据点对应的时间, 量纲: 天; 涵义: 修正儒略日
@@ -133,54 +132,57 @@ public:
 	 * @brief 将一个数据点加入候选体
 	 */
 	void add_point(PPVPT pt) {
-		int n = pts.size();
-		pt->inc_rel();
-		if (n >= 2)      frmu.push_back(pt);
-		else {
-			if (n == 0)  pts.push_back(pt);
-			else {// n == 1
-				PPVPT last = pts[0];
-				double t = pt->mjd - last->mjd;
-				vx = (pt->x - last->x) / t;
-				vy = (pt->y - last->y) / t;
-				pts.push_back(pt);
+		if (pts.size() >= 2){// 构成候选体的候选点
+			pt->inc_rel();
+			frmu.push_back(pt);
+		}
+		else {// 构成候选体的初始2点
+			pts.push_back(pt);
+			if (pts.size() == 2) {
+				PPVPT prev = pts[0];
+				double t = (lastmjd = pt->mjd) - prev->mjd;
+				vx = (pt->x - prev->x) / t;
+				vy = (pt->y - prev->y) / t;
 			}
-			lastmjd = pt->mjd;
 		}
 	}
 
 	void update() {// 检查/确认来自当前帧的数据点是否加入候选体已确定数据区
-		if (pts.size() >= 2) {
-			int n = frmu.size();
-			if (n) lastmjd = frmu[0]->mjd;
+		if (!frmu.size() || pts.size() < 2) return;
+		double x, y;	// 期望位置
+		double dx, dy, dx2y2, dx2y2max(1E30);
+		PPVPT pt;
 
-			if (n == 1 && frmu[0]->related == 1) {// 待确定数据点只有一个且该数据点仅与该候选体符合匹配条件
-				PPVPT pt   = frmu[0];
+		lastmjd = frmu[0]->mjd;
+		if (xy_expect(lastmjd, x, y)) {
+			/*
+			 * 该算法解决: 多点加入一个候选体时带来的混淆
+			 */
+			for (PPVPTVEC::iterator it = frmu.begin(); it != frmu.end(); ++it) {// 查找与候选体末端最接近的数据
+				dx = (*it)->x - x;
+				dy = (*it)->y - y;
+				dx2y2 = dx * dx + dy * dy;
+				if (dx2y2 < dx2y2max) {
+					if (pt.use_count()) pt->dec_rel();
+
+					dx2y2max = dx2y2;
+					pt = *it;
+				}
+			}
+
+			if (pt.use_count()) {// 将距离偏差最小的数据点加入候选体
 				PPVPT last = last_point();
-				double t   = pt->mjd - last->mjd;
+				double t   = lastmjd - last->mjd;
 				vx = (pt->x - last->x) / t;
 				vy = (pt->y - last->y) / t;
 				pts.push_back(pt);
 			}
-			else if (n) {// 来自当前帧的不确定点加入该候选体不确定库
-				for (PPVPTVEC::iterator it = frmu.begin(); it != frmu.end(); ++it) ptu.push_back(*it);
-			}
-			frmu.clear();
 		}
-	}
-
-	/*!
-	 * @brief 当候选体不能构成有效PV时, 需要一些操作以释放资源
-	 */
-	void invalid_release() {
-		for (PPVPTVEC::iterator it = pts.begin();  it != pts.end();  ++it) (*it)->dec_rel();
-		for (PPVPTVEC::iterator it = ptu.begin();  it != ptu.end();  ++it) (*it)->dec_rel();
-		for (PPVPTVEC::iterator it = frmu.begin(); it != frmu.end(); ++it) (*it)->dec_rel();
+		frmu.clear();
 	}
 
 	virtual ~pv_candidate() {
 		pts.clear();
-		ptu.clear();
 	}
 }PVCAN;
 typedef boost::shared_ptr<PVCAN> PPVCAN;
@@ -201,6 +203,7 @@ protected:
 	param_pv param_;	//< 数据处理参数
 	int camid_;			//< 该批次数据使用的相机编号
 	int fno_;			//< 最新数据帧编号
+	PPVFRM frmprev_;	//< 前一数据帧
 	PPVFRM frmlast_;	//< 最新数据帧
 	PPVCANVEC cans_;	//< 候选体集合
 	PPVOBJVEC objs_;	//< 目标集合

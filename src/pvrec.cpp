@@ -100,8 +100,8 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 			pt = *i;
 			ats.Mjd2Cal(pt->mjd, iy, im, id, fd);
 			Days2HMS(fd * 24.0, hh, mm, ss);
-			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f ",
-					iy, im, id, hh, mm, ss, pt->fno, pt->ra, pt->dc);
+			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f %7.2f %7.2f ",
+					iy, im, id, hh, mm, ss, pt->fno, pt->ra, pt->dc, pt->x, pt->y);
 			if (pt->mag > 20.0) fprintf(fpdst, "99.99\r\n");
 			else fprintf(fpdst, "%5.2f\r\n", pt->mag);
 		}
@@ -138,7 +138,6 @@ int ProcessFile(const char *pathRaw, const char *dirDst) {
 				pvrec.EndSequence();
 				objcnt += OutputObjects(&pvrec, dirDst); // 导出关联识别数据
 			}
-
 			oldid = newid;
 			pvrec.NewSequence(newid);
 		}

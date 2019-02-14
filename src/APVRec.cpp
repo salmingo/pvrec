@@ -29,6 +29,7 @@ void APVRec::NewSequence(int camid) {
 	fno_   = -1;
 	objs_.clear();
 	cans_.clear();
+	frmprev_.reset();
 	frmlast_.reset();
 }
 
@@ -37,7 +38,6 @@ void APVRec::AddPoint(PPVPT pt) {
 		if (fno_ != -1) end_frame();
 		new_frame(pt->mjd);
 		fno_ = pt->fno;
-		printf("fno = %d\n", fno_);
 	}
 	frmlast_->pts.push_back(pt);
 }
@@ -49,6 +49,7 @@ void APVRec::EndSequence() {
 		complete_candidates();	// 将所有候选体转换为目标
 	}
 	cans_.clear();
+	frmprev_.reset();
 	frmlast_.reset();
 }
 
@@ -66,27 +67,43 @@ PPVOBJVEC& APVRec::GetObject(int &camid) {
 }
 
 void APVRec::new_frame(double mjd) {
+	frmprev_ = frmlast_;
 	frmlast_ = boost::make_shared<PVFRM>(mjd);
 }
 
 void APVRec::end_frame() {
-	recheck_candidates();	// 检查候选体的有效性
+	recheck_candidates();	// 检查候选体的有效性, 释放无效候选体
 	append_candidates(); 	// 尝试将该帧数据加入候选体
 	create_candidates();	// 为未关联数据建立新的候选体
 }
 
 void APVRec::create_candidates() {
-	PPVPTVEC &pts = frmlast_->pts;
-	for (PPVPTVEC::iterator it = pts.begin(); it != pts.end(); ++it) {
-		if ((*it)->related == 0) {// 未与任何候选体建立关联的数据点
-			PPVCAN can = boost::make_shared<PVCAN>();
-			can->add_point(*it);
-			cans_.push_back(can);
+	if (!(frmprev_.unique() && frmlast_.unique())) return;
+
+	PPVPTVEC &pts1 = frmprev_->pts;
+	PPVPTVEC &pts2 = frmlast_->pts;
+	double stepmin = param_.stepmin;
+	double stepmax = param_.stepmax;
+	double dx, dy;
+	// 由相邻帧未关联数据构建候选体
+	for (PPVPTVEC::iterator it1 = pts1.begin(); it1 != pts1.end(); ++it1) {
+		for (PPVPTVEC::iterator it2 = pts2.begin(); it2 != pts2.end(); ++it2) {
+			dx = fabs((*it2)->x - (*it1)->x);
+			dy = fabs((*it2)->y - (*it1)->y);
+
+			if (stepmin <= dx && dx <= stepmax && stepmin <= dy && dy <= stepmax) {
+				PPVCAN can = boost::make_shared<PVCAN>();
+				can->add_point(*it1);
+				can->add_point(*it2);
+				cans_.push_back(can);
+			}
 		}
 	}
 }
 
 void APVRec::append_candidates() {
+	if (!cans_.size()) return; // 无候选体立即返回
+
 	double stepmin = param_.stepmin;
 	double stepmax = param_.stepmax;
 	double dxy  = param_.dxymax;
@@ -107,29 +124,29 @@ void APVRec::append_candidates() {
 			dx1 = fabs(x1 - (*i)->x);
 			dy1 = fabs(y1 - (*i)->y);
 			if (stepmin <= dx1 && dx1 <= stepmax && stepmin <= dy1 && dy1 <= stepmax) {// 位置变化步长未超出阈值
-				printf("%.1f %.1f %.1f %.1f %.1f %.1f ", pt->x, pt->y, (*i)->x, (*i)->y, dx1, dy1);
 				if (can->xy_expect(mjd, x2, y2)) {// 预测位置与测量位置偏差未超出阈值
 					dx2 = fabs(x2 - (*i)->x);
 					dy2 = fabs(y2 - (*i)->y);
-					printf("%.1f %.1f %.1f %.1f  ", dx2, dy2, x2, y2);
 					if (dx2 <= dxy && dy2 <= dxy){
-						printf("****");
 						can->add_point(*i);
 					}
 				}
 				else {
-					printf("!!!!");
 					can->add_point(*i);
 				}
-				printf("\n");
 			}
 		}
 	}
 	// 2. 将确定帧数据加入候选体
 	for (PPVCANVEC::iterator it = cans_.begin(); it != cans_.end(); ++it) {
 		(*it)->update();
-
 	}
+	// 3. 剔除已加入候选体的数据点
+	for (PPVPTVEC::iterator it = pts.begin(); it != pts.end(); ) {
+		if ((*it)->related) it = pts.erase(it);
+		else ++it;
+	}
+	if (!pts.size()) frmlast_.reset();
 }
 
 /*
@@ -138,17 +155,19 @@ void APVRec::append_candidates() {
  * - 小于阈值, 保留
  */
 void APVRec::recheck_candidates() {
-	int    nptmin = param_.nptmin;
-	double dtmax  = param_.dtmax;
-	double mjd    = frmlast_->mjd;
-	double dt;
+	if (cans_.size()) {
+		int    nptmin = param_.nptmin;
+		double dtmax  = param_.dtmax;
+		double mjd    = frmlast_->mjd;
+		double dt;
 
-	for (PPVCANVEC::iterator it = cans_.begin(); it != cans_.end();) {
-		dt = mjd - (*it)->lastmjd;
-		if (dt <= dtmax) ++it; // 保留
-		else {// 移出候选体集合
-			if ((*it)->pts.size() >= nptmin) candidate2object(*it); // 转换为目标
-			it = cans_.erase(it);
+		for (PPVCANVEC::iterator it = cans_.begin(); it != cans_.end();) {
+			dt = mjd - (*it)->lastmjd;
+			if (dt <= dtmax) ++it; // 保留
+			else {// 移出候选体集合
+				if ((*it)->pts.size() >= nptmin) candidate2object(*it); // 转换为目标
+				it = cans_.erase(it);
+			}
 		}
 	}
 }
