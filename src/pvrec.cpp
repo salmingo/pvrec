@@ -14,9 +14,13 @@
    关联不同时间的数据点, 从中提取位置变化源
 
  Bug: 2019-02-13
- 1. 无效星等. mag>20.0, 输出为99.99
- 2. 一个轨迹被识别为多个. 原因: (1) 匹配误差阈值; (2) XY应替换为赤经赤纬?
- 3. 目标目录必须加/作为追加符, 否则无法识别为目录
+   (解决)1. 无效星等. mag>20.0, 输出为99.99
+ 2. 一个轨迹被识别为多个. 原因: (1) 匹配误差阈值; (2) XY应替换为赤经赤纬
+   初步确定为：定位误差或时间误差
+   (解决)3. 目标目录必须加/作为追加符, 否则无法识别为目录
+
+ Bug: 2019-02-15
+ 1. 轨迹在靶面非边缘区域突然中断
 ============================================================================*/
 
 #include <stdio.h>
@@ -87,6 +91,14 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 	for (PPVOBJVEC::iterator it = objs.begin(); it != objs.end(); ++it) {
 		PPVOBJ obj = *it;
 		PPVPTVEC &pts = obj->pts;
+
+//		// 筛选同步带目标
+//		bool is_valid(true);
+//		for (PPVPTVEC::iterator i = pts.begin(); i != pts.end() && is_valid; ++i) {
+//			is_valid = (*i)->dc > -16.0 && (*i)->dc < 0.0;
+//		}
+//		if (!is_valid) continue;
+
 		// 生成文件路径
 		ats.Mjd2Cal(pts[0]->mjd, iy, im, id, fd);
 		sprintf(filename, "%d%02d%02d_%03d_%04d.txt",
@@ -100,8 +112,8 @@ int OutputObjects(APVRec *pvrec, const char *dirDst) {
 			pt = *i;
 			ats.Mjd2Cal(pt->mjd, iy, im, id, fd);
 			Days2HMS(fd * 24.0, hh, mm, ss);
-			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f %7.2f %7.2f ",
-					iy, im, id, hh, mm, ss, pt->fno, pt->ra, pt->dc, pt->x, pt->y);
+			fprintf(fpdst, "%d %02d %02d %02d %02d %06.3f %4d %9.5f %9.5f ",
+					iy, im, id, hh, mm, ss, pt->fno, pt->ra, pt->dc);
 			if (pt->mag > 20.0) fprintf(fpdst, "99.99\r\n");
 			else fprintf(fpdst, "%5.2f\r\n", pt->mag);
 		}

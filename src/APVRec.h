@@ -27,14 +27,11 @@
 #ifndef APVREC_H_
 #define APVREC_H_
 
-#include <vector>
 #include <string.h>
 #include <boost/smart_ptr.hpp>
 #include <boost/container/stable_vector.hpp>
 #include <boost/container/deque.hpp>
 #include "ADefine.h"
-
-using std::vector;
 
 namespace AstroUtil {
 ///////////////////////////////////////////////////////////////////////////////
@@ -51,7 +48,7 @@ public:
 		dtmax   = 60.0 / 86400.0;
 		stepmin = 1.0;
 		stepmax = 100.0;
-		dxymax  = 2.0;
+		dxymax  = 5.0;
 	}
 };
 
@@ -147,11 +144,11 @@ public:
 		}
 	}
 
-	void update() {// 检查/确认来自当前帧的数据点是否加入候选体已确定数据区
-		if (!frmu.size() || pts.size() < 2) return;
+	PPVPT update() {// 检查/确认来自当前帧的数据点是否加入候选体已确定数据区
+		PPVPT pt;
 		double x, y;	// 期望位置
 		double dx, dy, dx2y2, dx2y2max(1E30);
-		PPVPT pt;
+		if (!frmu.size() || pts.size() < 2) return pt;
 
 		lastmjd = frmu[0]->mjd;
 		if (xy_expect(lastmjd, x, y)) {
@@ -179,6 +176,7 @@ public:
 			}
 		}
 		frmu.clear();
+		return pt;
 	}
 
 	virtual ~pv_candidate() {

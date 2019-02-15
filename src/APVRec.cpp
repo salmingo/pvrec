@@ -139,7 +139,13 @@ void APVRec::append_candidates() {
 	}
 	// 2. 将确定帧数据加入候选体
 	for (PPVCANVEC::iterator it = cans_.begin(); it != cans_.end(); ++it) {
-		(*it)->update();
+		pt = (*it)->update();
+
+		if (pt.use_count()) {// 通知数据库, 构成弧段的数据点
+			if ((*it)->pts.size() == 3) {// 通知数据库, 构成弧段的前两个数据点
+
+			}
+		}
 	}
 	// 3. 剔除已加入候选体的数据点
 	for (PPVPTVEC::iterator it = pts.begin(); it != pts.end(); ) {
@@ -163,7 +169,7 @@ void APVRec::recheck_candidates() {
 
 		for (PPVCANVEC::iterator it = cans_.begin(); it != cans_.end();) {
 			dt = mjd - (*it)->lastmjd;
-			if (dt <= dtmax) ++it; // 保留
+			if (0 < dt && dt <= dtmax) ++it; // 保留. dt > 0: 原始数据未按时间严格排序
 			else {// 移出候选体集合
 				if ((*it)->pts.size() >= nptmin) candidate2object(*it); // 转换为目标
 				it = cans_.erase(it);
